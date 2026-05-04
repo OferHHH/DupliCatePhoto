@@ -241,7 +241,7 @@ class ReviewPage(QWidget):
         outer.addLayout(cols, 1)
 
         controls = QHBoxLayout()
-        self.skip_btn = QPushButton("Keep Both / Skip →")
+        self.skip_btn = QPushButton("Skip This Pair →")
         self.skip_btn.setMinimumHeight(40)
         self.skip_btn.clicked.connect(on_skip)
         self.done_btn = QPushButton("Stop Reviewing")

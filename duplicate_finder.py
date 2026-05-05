@@ -27,7 +27,7 @@ def _enumerate_images(root_folder: str) -> list[str]:
     for dirpath, _, filenames in os.walk(root_folder):
         for fn in filenames:
             if Path(fn).suffix.lower() in IMAGE_EXTENSIONS:
-                files.append(os.path.join(dirpath, fn))
+                files.append(os.path.normpath(os.path.join(dirpath, fn)))
     return files
 
 

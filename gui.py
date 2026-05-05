@@ -415,8 +415,9 @@ class MainWindow(QMainWindow):
         )
         if confirm != QMessageBox.Yes:
             return
+        native_path = os.path.normpath(path)
         try:
-            send2trash(path)
+            send2trash(native_path)
             self._deleted.add(path)
             self._delete_count += 1
             self._reviewed_total += 1

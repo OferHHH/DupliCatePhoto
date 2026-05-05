@@ -8,7 +8,6 @@ import re
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QPixmap, QFont, QTransform
 from PySide6.QtWidgets import (
-    QApplication,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -19,7 +18,6 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -73,7 +71,7 @@ class PhotoColumn(QFrame):
     Rotation is preview-only; the file on disk is never modified.
     """
 
-    def __init__(self, on_delete):
+    def __init__(self, on_delete, on_keep_this):
         super().__init__()
         self.setFrameShape(QFrame.StyledPanel)
         self.setLineWidth(1)
@@ -109,6 +107,14 @@ class PhotoColumn(QFrame):
         )
         self.rotate_btn.clicked.connect(self._rotate_preview)
 
+        self.keep_btn = QPushButton("Keep this · delete the others")
+        self.keep_btn.setStyleSheet(
+            "QPushButton { background-color: #27ae60; color: white; padding: 8px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #2ecc71; }"
+            "QPushButton:disabled { background-color: #888; }"
+        )
+        self.keep_btn.clicked.connect(lambda: on_keep_this(self._path))
+
         self.delete_btn = QPushButton("Delete this one")
         self.delete_btn.setStyleSheet(
             "QPushButton { background-color: #c0392b; color: white; padding: 8px; font-weight: bold; }"
@@ -123,6 +129,7 @@ class PhotoColumn(QFrame):
         layout.addWidget(self.path_label)
         layout.addWidget(self.size_label)
         layout.addWidget(self.rotate_btn)
+        layout.addWidget(self.keep_btn)
         layout.addWidget(self.delete_btn)
 
     def set_image(self, path: str) -> None:
@@ -271,9 +278,10 @@ class ClusterReviewPage(QWidget):
 
     GRID_COLUMNS = 2
 
-    def __init__(self, on_skip, on_done, on_delete):
+    def __init__(self, on_skip, on_done, on_delete, on_keep_this, on_delete_all):
         super().__init__()
         self._on_delete = on_delete
+        self._on_keep_this = on_keep_this
 
         outer = QVBoxLayout(self)
 
@@ -298,11 +306,22 @@ class ClusterReviewPage(QWidget):
         self.skip_btn = QPushButton("Skip This Group →")
         self.skip_btn.setMinimumHeight(40)
         self.skip_btn.clicked.connect(on_skip)
+
+        self.delete_all_btn = QPushButton("Delete ALL in this Group")
+        self.delete_all_btn.setMinimumHeight(40)
+        self.delete_all_btn.setStyleSheet(
+            "QPushButton { background-color: #c0392b; color: white; padding: 8px 16px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #e74c3c; }"
+        )
+        self.delete_all_btn.clicked.connect(on_delete_all)
+
         self.done_btn = QPushButton("Stop Reviewing")
         self.done_btn.setMinimumHeight(40)
         self.done_btn.clicked.connect(on_done)
         controls.addStretch()
         controls.addWidget(self.skip_btn)
+        controls.addSpacing(20)
+        controls.addWidget(self.delete_all_btn)
         controls.addSpacing(20)
         controls.addWidget(self.done_btn)
         controls.addStretch()
@@ -325,7 +344,7 @@ class ClusterReviewPage(QWidget):
             if w is not None:
                 w.deleteLater()
         for i, p in enumerate(paths):
-            cell = PhotoColumn(self._on_delete)
+            cell = PhotoColumn(self._on_delete, self._on_keep_this)
             cell.set_image(p)
             row, col = divmod(i, self.GRID_COLUMNS)
             self.grid_layout.addWidget(cell, row, col)
@@ -389,7 +408,13 @@ class MainWindow(QMainWindow):
 
         self.welcome = WelcomePage(self.pick_folder, self.pick_two_folders)
         self.scan = ScanPage(self.cancel_scan)
-        self.review = ClusterReviewPage(self.skip_cluster, self.finish_review, self.delete_path)
+        self.review = ClusterReviewPage(
+            self.skip_cluster,
+            self.finish_review,
+            self.delete_path,
+            self.keep_this_delete_others,
+            self.delete_all_in_group,
+        )
         self.finished_page = FinishedPage(self.restart)
         for page in (self.welcome, self.scan, self.review, self.finished_page):
             self.stack.addWidget(page)
@@ -502,6 +527,64 @@ class MainWindow(QMainWindow):
             self._show_current_cluster()
         except Exception as e:
             QMessageBox.warning(self, "Delete failed", f"Could not delete file:\n{e}")
+
+    def _live_paths_in_current_cluster(self) -> list[str]:
+        if not (0 <= self._index < len(self._clusters)):
+            return []
+        paths, _ = self._clusters[self._index]
+        return [p for p in paths if p not in self._deleted and os.path.exists(p)]
+
+    def _bulk_delete(self, paths: list[str], title: str, intro: str) -> None:
+        if not paths:
+            return
+        listed = "\n".join(f"  • {p}" for p in paths)
+        confirm = QMessageBox.question(
+            self,
+            title,
+            f"{intro}\n\n{listed}\n\nAll {len(paths)} file(s) will be sent to the Recycle Bin.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        failures: list[str] = []
+        for p in paths:
+            try:
+                send2trash(os.path.normpath(p))
+                self._deleted.add(p)
+                self._delete_count += 1
+            except Exception as e:
+                failures.append(f"{p}: {e}")
+        if failures:
+            QMessageBox.warning(
+                self,
+                "Some deletions failed",
+                "The following file(s) could not be deleted:\n\n" + "\n".join(failures),
+            )
+        self._show_current_cluster()
+
+    def keep_this_delete_others(self, keep_path: str | None) -> None:
+        if not keep_path:
+            return
+        live = self._live_paths_in_current_cluster()
+        to_delete = [p for p in live if p != keep_path]
+        if not to_delete:
+            return
+        self._bulk_delete(
+            to_delete,
+            "Keep one, delete the others?",
+            f"Keep this file:\n  ✓ {keep_path}\n\nAnd delete the other(s):",
+        )
+
+    def delete_all_in_group(self) -> None:
+        live = self._live_paths_in_current_cluster()
+        if not live:
+            return
+        self._bulk_delete(
+            live,
+            "Delete every photo in this group?",
+            "This removes ALL copies in this group — no copy will remain:",
+        )
 
     def finish_review(self) -> None:
         self.finished_page.set_summary(self._delete_count, self._skip_count, self._index)

@@ -141,7 +141,7 @@ class PhotoColumn(QFrame):
 
 
 class WelcomePage(QWidget):
-    def __init__(self, on_pick):
+    def __init__(self, on_pick_one, on_pick_two):
         super().__init__()
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignCenter)
@@ -154,26 +154,37 @@ class WelcomePage(QWidget):
         title.setFont(f)
 
         subtitle = QLabel(
-            f"Find duplicate or near-identical photos (≥ {SIMILARITY_THRESHOLD_PERCENT:.0f}% similarity)\n"
-            "in any folder, including subfolders."
+            f"Find duplicate or near-identical photos (≥ {SIMILARITY_THRESHOLD_PERCENT:.0f}% similarity).\n"
+            "Choose how you want to compare:"
         )
         subtitle.setAlignment(Qt.AlignCenter)
         subtitle.setStyleSheet("color: #555;")
 
-        pick_btn = QPushButton("Choose Folder to Scan…")
-        pick_btn.setMinimumHeight(50)
-        pick_btn.setStyleSheet(
-            "QPushButton { background-color: #2980b9; color: white; padding: 12px 24px; font-size: 14pt; }"
+        primary_style = (
+            "QPushButton { background-color: #2980b9; color: white; padding: 14px 24px; font-size: 13pt; }"
             "QPushButton:hover { background-color: #3498db; }"
         )
-        pick_btn.clicked.connect(on_pick)
+
+        one_btn = QPushButton("Scan One Folder\n(find duplicates inside it)")
+        one_btn.setMinimumHeight(70)
+        one_btn.setMinimumWidth(360)
+        one_btn.setStyleSheet(primary_style)
+        one_btn.clicked.connect(on_pick_one)
+
+        two_btn = QPushButton("Compare Two Folders\n(find duplicates across both, including within each)")
+        two_btn.setMinimumHeight(70)
+        two_btn.setMinimumWidth(360)
+        two_btn.setStyleSheet(primary_style)
+        two_btn.clicked.connect(on_pick_two)
 
         layout.addStretch()
         layout.addWidget(title)
         layout.addSpacing(8)
         layout.addWidget(subtitle)
         layout.addSpacing(24)
-        layout.addWidget(pick_btn, 0, Qt.AlignCenter)
+        layout.addWidget(one_btn, 0, Qt.AlignCenter)
+        layout.addSpacing(12)
+        layout.addWidget(two_btn, 0, Qt.AlignCenter)
         layout.addStretch()
 
 
@@ -317,7 +328,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
 
-        self.welcome = WelcomePage(self.pick_folder)
+        self.welcome = WelcomePage(self.pick_folder, self.pick_two_folders)
         self.scan = ScanPage(self.cancel_scan)
         self.review = ReviewPage(self.skip_pair, self.finish_review, self.delete_path)
         self.finished_page = FinishedPage(self.restart)
@@ -333,21 +344,32 @@ class MainWindow(QMainWindow):
         self._skip_count = 0
         self._reviewed_total = 0
 
-    def pick_folder(self) -> None:
-        folder = QFileDialog.getExistingDirectory(
-            self,
-            "Select a folder to scan for duplicate photos",
-            os.path.expanduser("~"),
-        )
+    def _pick_valid_folder(self, title: str) -> str | None:
+        folder = QFileDialog.getExistingDirectory(self, title, os.path.expanduser("~"))
         if not folder:
-            return
+            return None
         forbidden, reason = is_forbidden_folder(folder)
         if forbidden:
             QMessageBox.warning(self, "Folder not allowed", reason)
-            return
-        self.start_scan(folder)
+            return None
+        return folder
 
-    def start_scan(self, folder: str) -> None:
+    def pick_folder(self) -> None:
+        folder = self._pick_valid_folder("Select a folder to scan for duplicate photos")
+        if not folder:
+            return
+        self.start_scan([folder])
+
+    def pick_two_folders(self) -> None:
+        folder_a = self._pick_valid_folder("Select the FIRST folder")
+        if not folder_a:
+            return
+        folder_b = self._pick_valid_folder("Select the SECOND folder")
+        if not folder_b:
+            return
+        self.start_scan([folder_a, folder_b])
+
+    def start_scan(self, folders: list[str]) -> None:
         self._pairs = []
         self._index = 0
         self._deleted.clear()
@@ -355,10 +377,11 @@ class MainWindow(QMainWindow):
         self._skip_count = 0
         self._reviewed_total = 0
 
-        self.scan.update_progress(0, 1, f"Preparing to scan: {folder}")
+        label = " and ".join(folders) if len(folders) > 1 else folders[0]
+        self.scan.update_progress(0, 1, f"Preparing to scan: {label}")
         self.stack.setCurrentWidget(self.scan)
 
-        self._worker = ScanWorker(folder)
+        self._worker = ScanWorker(folders)
         self._worker.progress.connect(self.scan.update_progress)
         self._worker.finished_ok.connect(self.on_scan_done)
         self._worker.failed.connect(self.on_scan_failed)

@@ -22,8 +22,10 @@ A desktop app for Windows that finds duplicate and near-identical photos in a fo
 
 ## How it works
 
-1. **Welcome screen** → click *Choose Folder to Scan*.
-2. **Scanning** → the app walks the folder tree, opens each image, and computes a 64-bit perceptual hash.
+1. **Welcome screen** → choose a mode:
+   - **Scan One Folder** — walks one folder (and subfolders) and finds duplicates inside it.
+   - **Compare Two Folders** — walks both folders (and subfolders), then finds duplicates *across* them and *within* each. Useful for comparing, e.g., a OneDrive photo library against an external-drive backup.
+2. **Scanning** → the app walks the folder tree(s), opens each image, and computes a 64-bit perceptual hash. If the two folders overlap (one contains the other), files are deduplicated by real path so they aren't scanned twice.
 3. **Comparison** → every image is compared to every other image; pairs whose hashes differ by ≤ 6 bits (≥ 90.6% similarity) are flagged as duplicates.
 4. **Review** → pairs are shown one at a time, sorted with the most-similar first. For each pair you can:
    - **Delete this one** (under the left or right image) — sends to Recycle Bin and moves to the next pair.

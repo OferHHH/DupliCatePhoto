@@ -22,25 +22,36 @@ SIMILARITY_THRESHOLD_PERCENT = 90.0
 MAX_HAMMING_DISTANCE = int(round(TOTAL_BITS * (1 - SIMILARITY_THRESHOLD_PERCENT / 100)))
 
 
-def _enumerate_images(root_folder: str) -> list[str]:
-    files = []
-    for dirpath, _, filenames in os.walk(root_folder):
-        for fn in filenames:
-            if Path(fn).suffix.lower() in IMAGE_EXTENSIONS:
-                files.append(os.path.normpath(os.path.join(dirpath, fn)))
+def _enumerate_images(root_folders: list[str]) -> list[str]:
+    """Walk every folder, collect image files, deduplicate by case-folded realpath."""
+    seen: set[str] = set()
+    files: list[str] = []
+    for root in root_folders:
+        for dirpath, _, filenames in os.walk(root):
+            for fn in filenames:
+                if Path(fn).suffix.lower() in IMAGE_EXTENSIONS:
+                    full = os.path.normpath(os.path.join(dirpath, fn))
+                    try:
+                        key = os.path.realpath(full).lower()
+                    except OSError:
+                        key = full.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    files.append(full)
     return files
 
 
 class ScanWorker(QThread):
-    """Background worker that scans a folder, hashes images, and reports similar pairs."""
+    """Background worker that scans one or more folders, hashes images, and reports similar pairs."""
 
     progress = Signal(int, int, str)
     finished_ok = Signal(list)
     failed = Signal(str)
 
-    def __init__(self, folder: str, parent=None):
+    def __init__(self, folders: list[str], parent=None):
         super().__init__(parent)
-        self.folder = folder
+        self.folders = list(folders)
         self._cancel = False
 
     def cancel(self) -> None:
@@ -48,7 +59,7 @@ class ScanWorker(QThread):
 
     def run(self) -> None:
         try:
-            files = _enumerate_images(self.folder)
+            files = _enumerate_images(self.folders)
             total = len(files)
             if total == 0:
                 self.finished_ok.emit([])

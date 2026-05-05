@@ -11,12 +11,14 @@ from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
@@ -228,11 +230,14 @@ class ScanPage(QWidget):
         self.status.setText(message)
 
 
-class ReviewPage(QWidget):
+class ClusterReviewPage(QWidget):
+    """Show one cluster (group) of similar photos at a time, in a scrollable grid."""
+
+    GRID_COLUMNS = 2
+
     def __init__(self, on_skip, on_done, on_delete):
         super().__init__()
-        self._on_skip = on_skip
-        self._on_done = on_done
+        self._on_delete = on_delete
 
         outer = QVBoxLayout(self)
 
@@ -244,15 +249,17 @@ class ReviewPage(QWidget):
         self.header.setFont(f)
         outer.addWidget(self.header)
 
-        cols = QHBoxLayout()
-        self.left = PhotoColumn(on_delete)
-        self.right = PhotoColumn(on_delete)
-        cols.addWidget(self.left)
-        cols.addWidget(self.right)
-        outer.addLayout(cols, 1)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.grid_container = QWidget()
+        self.grid_layout = QGridLayout(self.grid_container)
+        self.grid_layout.setContentsMargins(8, 8, 8, 8)
+        self.grid_layout.setSpacing(12)
+        self.scroll_area.setWidget(self.grid_container)
+        outer.addWidget(self.scroll_area, 1)
 
         controls = QHBoxLayout()
-        self.skip_btn = QPushButton("Skip This Pair →")
+        self.skip_btn = QPushButton("Skip This Group →")
         self.skip_btn.setMinimumHeight(40)
         self.skip_btn.clicked.connect(on_skip)
         self.done_btn = QPushButton("Stop Reviewing")
@@ -265,12 +272,28 @@ class ReviewPage(QWidget):
         controls.addStretch()
         outer.addLayout(controls)
 
-    def show_pair(self, index: int, total: int, path_a: str, path_b: str, similarity: float) -> None:
+    def show_cluster(
+        self,
+        index: int,
+        total: int,
+        paths: list[str],
+        best_similarity: float,
+    ) -> None:
         self.header.setText(
-            f"Pair {index + 1} of {total}   ·   Similarity: {similarity:.1f}%"
+            f"Group {index + 1} of {total}   ·   {len(paths)} similar photos"
+            f"   ·   best match: {best_similarity:.1f}%"
         )
-        self.left.set_image(path_a)
-        self.right.set_image(path_b)
+        while self.grid_layout.count():
+            item = self.grid_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        for i, p in enumerate(paths):
+            cell = PhotoColumn(self._on_delete)
+            cell.set_image(p)
+            row, col = divmod(i, self.GRID_COLUMNS)
+            self.grid_layout.addWidget(cell, row, col)
+        self.scroll_area.verticalScrollBar().setValue(0)
 
 
 class FinishedPage(QWidget):
@@ -308,13 +331,13 @@ class FinishedPage(QWidget):
         layout.addStretch()
 
     def set_summary(self, deleted: int, skipped: int, total: int) -> None:
-        if total == 0:
+        if total == 0 and deleted == 0:
             self.heading.setText("No duplicates found")
-            self.detail.setText("No image pairs at or above the similarity threshold were detected.")
+            self.detail.setText("No similar photos at or above the similarity threshold were detected.")
         else:
             self.heading.setText("Review complete")
             self.detail.setText(
-                f"Deleted: {deleted}   ·   Kept: {skipped}   ·   Total pairs reviewed: {total}\n"
+                f"Files deleted: {deleted}   ·   Groups skipped: {skipped}   ·   Groups reviewed: {total}\n"
                 "Deleted files are in your Recycle Bin and can be restored from there."
             )
 
@@ -330,14 +353,14 @@ class MainWindow(QMainWindow):
 
         self.welcome = WelcomePage(self.pick_folder, self.pick_two_folders)
         self.scan = ScanPage(self.cancel_scan)
-        self.review = ReviewPage(self.skip_pair, self.finish_review, self.delete_path)
+        self.review = ClusterReviewPage(self.skip_cluster, self.finish_review, self.delete_path)
         self.finished_page = FinishedPage(self.restart)
         for page in (self.welcome, self.scan, self.review, self.finished_page):
             self.stack.addWidget(page)
         self.stack.setCurrentWidget(self.welcome)
 
         self._worker: ScanWorker | None = None
-        self._pairs: list[tuple[str, str, float]] = []
+        self._clusters: list[tuple[list[str], float]] = []
         self._index = 0
         self._deleted: set[str] = set()
         self._delete_count = 0
@@ -397,34 +420,31 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Scan failed", message)
         self.stack.setCurrentWidget(self.welcome)
 
-    def on_scan_done(self, pairs: list) -> None:
-        self._pairs = pairs
+    def on_scan_done(self, clusters: list) -> None:
+        self._clusters = clusters
         self._index = 0
-        if not pairs:
+        if not clusters:
             self.finished_page.set_summary(0, 0, 0)
             self.stack.setCurrentWidget(self.finished_page)
             return
-        self._show_current_pair()
+        self._show_current_cluster()
         self.stack.setCurrentWidget(self.review)
 
-    def _show_current_pair(self) -> None:
-        while self._index < len(self._pairs):
-            a, b, sim = self._pairs[self._index]
-            if a in self._deleted or b in self._deleted:
+    def _show_current_cluster(self) -> None:
+        while self._index < len(self._clusters):
+            paths, sim = self._clusters[self._index]
+            live = [p for p in paths if p not in self._deleted and os.path.exists(p)]
+            if len(live) < 2:
                 self._index += 1
                 continue
-            if not (os.path.exists(a) and os.path.exists(b)):
-                self._index += 1
-                continue
-            self.review.show_pair(self._index, len(self._pairs), a, b, sim)
+            self.review.show_cluster(self._index, len(self._clusters), live, sim)
             return
         self.finish_review()
 
-    def skip_pair(self) -> None:
+    def skip_cluster(self) -> None:
         self._skip_count += 1
-        self._reviewed_total += 1
         self._index += 1
-        self._show_current_pair()
+        self._show_current_cluster()
 
     def delete_path(self, path: str | None) -> None:
         if not path:
@@ -443,14 +463,12 @@ class MainWindow(QMainWindow):
             send2trash(native_path)
             self._deleted.add(path)
             self._delete_count += 1
-            self._reviewed_total += 1
-            self._index += 1
-            self._show_current_pair()
+            self._show_current_cluster()
         except Exception as e:
             QMessageBox.warning(self, "Delete failed", f"Could not delete file:\n{e}")
 
     def finish_review(self) -> None:
-        self.finished_page.set_summary(self._delete_count, self._skip_count, self._reviewed_total)
+        self.finished_page.set_summary(self._delete_count, self._skip_count, self._index)
         self.stack.setCurrentWidget(self.finished_page)
 
     def restart(self) -> None:

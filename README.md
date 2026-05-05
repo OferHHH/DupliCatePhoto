@@ -26,13 +26,14 @@ A desktop app for Windows that finds duplicate and near-identical photos in a fo
    - **Scan One Folder** — walks one folder (and subfolders) and finds duplicates inside it.
    - **Compare Two Folders** — walks both folders (and subfolders), then finds duplicates *across* them and *within* each. Useful for comparing, e.g., a OneDrive photo library against an external-drive backup.
 2. **Scanning** → the app walks the folder tree(s), opens each image, and computes a 64-bit perceptual hash. If the two folders overlap (one contains the other), files are deduplicated by real path so they aren't scanned twice.
-3. **Comparison** → every image is compared to every other image; pairs whose hashes differ by ≤ 6 bits (≥ 90.6% similarity) are flagged as duplicates.
-4. **Review** → pairs are shown one at a time, sorted with the most-similar first. For each pair you can:
-   - **Delete this one** (under the left or right image) — sends to Recycle Bin and moves to the next pair.
-   - **Keep Both / Skip →** — keeps both files and moves to the next pair.
+3. **Comparison** → every image is compared to every other image; pairs whose hashes differ by ≤ 6 bits (≥ 90.6% similarity) are flagged.
+4. **Grouping** → pairs are merged into **groups** via transitive closure (if A is similar to B and B is similar to C, all three end up in the same group). Each photo is therefore reviewed exactly once, no matter how many of its neighbors are also similar.
+5. **Review** → groups are shown one at a time, sorted with the highest-similarity match first. The whole group is laid out in a grid; under each photo you can:
+   - **Delete this one** — sends that single photo to the Recycle Bin. The group view refreshes with the deleted photo removed; the rest of the group stays visible so you can keep deleting.
+   - **Skip This Group →** — keeps every photo in the group and moves on.
    - **Stop Reviewing** — ends the session and shows a summary.
 
-If a file appears in multiple pairs and you delete it, the app automatically skips any later pairs that reference it.
+When fewer than two photos remain in a group (because you deleted enough), the app moves on automatically.
 
 ## Project structure
 

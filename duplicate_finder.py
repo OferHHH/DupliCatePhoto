@@ -22,6 +22,52 @@ SIMILARITY_THRESHOLD_PERCENT = 90.0
 MAX_HAMMING_DISTANCE = int(round(TOTAL_BITS * (1 - SIMILARITY_THRESHOLD_PERCENT / 100)))
 
 
+def _build_clusters(
+    pairs: list[tuple[str, str, float]],
+    all_paths: list[str],
+) -> list[tuple[list[str], float]]:
+    """Group similar images into clusters via union-find.
+
+    Returns a list of (paths_in_cluster, best_pairwise_similarity), sorted by
+    best similarity descending. Singletons are dropped.
+    """
+    parent: dict[str, str] = {p: p for p in all_paths}
+
+    def find(x: str) -> str:
+        root = x
+        while parent[root] != root:
+            root = parent[root]
+        while parent[x] != root:
+            parent[x], x = root, parent[x]
+        return root
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for a, b, _ in pairs:
+        union(a, b)
+
+    groups: dict[str, list[str]] = {}
+    for p in all_paths:
+        groups.setdefault(find(p), []).append(p)
+
+    best_sim_per_root: dict[str, float] = {}
+    for a, b, sim in pairs:
+        root = find(a)
+        if best_sim_per_root.get(root, 0.0) < sim:
+            best_sim_per_root[root] = sim
+
+    clusters: list[tuple[list[str], float]] = []
+    for root, members in groups.items():
+        if len(members) >= 2:
+            clusters.append((sorted(members), best_sim_per_root.get(root, 0.0)))
+
+    clusters.sort(key=lambda c: c[1], reverse=True)
+    return clusters
+
+
 def _enumerate_images(root_folders: list[str]) -> list[str]:
     """Walk every folder, collect image files, deduplicate by case-folded realpath."""
     seen: set[str] = set()
@@ -101,7 +147,8 @@ class ScanWorker(QThread):
                         similarity = (1 - distance / TOTAL_BITS) * 100
                         duplicates.append((path_a, path_b, similarity))
 
-            duplicates.sort(key=lambda t: t[2], reverse=True)
-            self.finished_ok.emit(duplicates)
+            self.progress.emit(total_pairs, total_pairs, "Grouping similar photos…")
+            clusters = _build_clusters(duplicates, [p for p, _ in hashes])
+            self.finished_ok.emit(clusters)
         except Exception as e:
             self.failed.emit(f"{type(e).__name__}: {e}")

@@ -6,7 +6,7 @@ import os
 import re
 
 from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QPixmap, QFont
+from PySide6.QtGui import QPixmap, QFont, QTransform
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -68,13 +68,18 @@ def human_size(num_bytes: int) -> str:
 
 
 class PhotoColumn(QFrame):
-    """One side of the comparison view: preview + path + name + size + delete button."""
+    """One side of the comparison view: preview + path + name + size + rotate/delete buttons.
+
+    Rotation is preview-only; the file on disk is never modified.
+    """
 
     def __init__(self, on_delete):
         super().__init__()
         self.setFrameShape(QFrame.StyledPanel)
         self.setLineWidth(1)
         self._path: str | None = None
+        self._original_pixmap: QPixmap | None = None
+        self._rotation = 0
 
         self.preview = QLabel()
         self.preview.setAlignment(Qt.AlignCenter)
@@ -97,6 +102,13 @@ class PhotoColumn(QFrame):
         self.size_label = QLabel()
         self.size_label.setStyleSheet("color: #555;")
 
+        self.rotate_btn = QPushButton("⟳ Rotate (preview only)")
+        self.rotate_btn.setStyleSheet(
+            "QPushButton { background-color: #34495e; color: white; padding: 6px; }"
+            "QPushButton:hover { background-color: #4a6076; }"
+        )
+        self.rotate_btn.clicked.connect(self._rotate_preview)
+
         self.delete_btn = QPushButton("Delete this one")
         self.delete_btn.setStyleSheet(
             "QPushButton { background-color: #c0392b; color: white; padding: 8px; font-weight: bold; }"
@@ -110,10 +122,12 @@ class PhotoColumn(QFrame):
         layout.addWidget(self.name_label)
         layout.addWidget(self.path_label)
         layout.addWidget(self.size_label)
+        layout.addWidget(self.rotate_btn)
         layout.addWidget(self.delete_btn)
 
     def set_image(self, path: str) -> None:
         self._path = path
+        self._rotation = 0
         self.name_label.setText(os.path.basename(path))
         self.path_label.setText(path)
         try:
@@ -124,17 +138,39 @@ class PhotoColumn(QFrame):
 
         pixmap = QPixmap(path)
         if pixmap.isNull():
+            self._original_pixmap = None
             self.preview.setText("(cannot preview)")
+            self.rotate_btn.setEnabled(False)
         else:
-            scaled = pixmap.scaled(
-                PREVIEW_SIZE,
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation,
-            )
-            self.preview.setPixmap(scaled)
+            self._original_pixmap = pixmap
+            self.rotate_btn.setEnabled(True)
+            self._render_preview()
+
+    def _rotate_preview(self) -> None:
+        if self._original_pixmap is None:
+            return
+        self._rotation = (self._rotation + 90) % 360
+        self._render_preview()
+
+    def _render_preview(self) -> None:
+        if self._original_pixmap is None:
+            return
+        if self._rotation:
+            transform = QTransform().rotate(self._rotation)
+            rotated = self._original_pixmap.transformed(transform, Qt.SmoothTransformation)
+        else:
+            rotated = self._original_pixmap
+        scaled = rotated.scaled(
+            PREVIEW_SIZE,
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
+        self.preview.setPixmap(scaled)
 
     def clear(self) -> None:
         self._path = None
+        self._original_pixmap = None
+        self._rotation = 0
         self.preview.clear()
         self.preview.setText("(no image)")
         self.name_label.clear()
